@@ -1,28 +1,81 @@
+import os
+import re
+import csv
 import pandas as pd
-from linkedin_api import Linkedin
-from openai import OpenAI
 
-# 1) Load connections CSV
-df = pd.read_csv("data/Connections.csv", parse_dates=["Connected On"])
+# 0) Path to your CSV
+CSV_PATH = os.path.join(os.path.dirname(__file__), "data", "Connections.csv")
 
-# 2) Analytics
+# 1) Read entire file, sniff delimiter, fall back to comma
+with open(CSV_PATH, newline="", encoding="utf-8") as f:
+    sample = f.read(1024)
+    f.seek(0)
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=[",", ";", "\t"])
+        delim = dialect.delimiter
+    except csv.Error:
+        delim = ","
+    reader = csv.reader(f, delimiter=delim)
+    rows = [row for row in reader if any(cell.strip() for cell in row)]  # drop blank rows
+
+# 2) Separate header and data
+header = rows[0]
+num_cols = len(header)
+data_rows = [row for row in rows[1:] if len(row) == num_cols]
+
+# 3) Build DataFrame
+df = pd.DataFrame(data_rows, columns=header)
+
+# 4) Clean up whitespace
+df = df.applymap(lambda v: v.strip() if isinstance(v, str) else v)
+
+# 5) Parse your date column
+if "Connected On" in df.columns:
+    df["Connected On"] = pd.to_datetime(
+        df["Connected On"], dayfirst=True, errors="coerce"
+    )
+else:
+    raise ValueError("Expected a 'Connected On' column in Connections.csv")
+
+# — now your tools can operate on `df` —
 def top_companies(n=5):
-    return df["Company"].value_counts().head(n).to_dict()
+    # 1) Coerce n into an integer
+    try:
+        n_int = int(n)
+    except:
+        m = re.search(r"\d+", str(n))
+        n_int = int(m.group()) if m else 5
+
+    # 2) Get the counts and return the top-n
+    counts = (
+        df["Company"]
+        .fillna("Unknown")
+        .value_counts()
+        .head(n_int)
+    )
+    return counts.to_dict()
 
 def stale_connections(years=3):
-    cutoff = pd.Timestamp.today() - pd.DateOffset(years=years)
-    stale = df[df["Connected On"] < cutoff]
-    return stale[["First Name","Last Name","LinkedIn URL"]].to_dict(orient="records")
+    """
+    Returns connections not touched in X years.
+    Coerces inputs like "years=3" into the integer 3.
+    """
+    # 1) Coerce years → int
+    try:
+        years_int = int(years)
+    except Exception:
+        m = re.search(r"\d+", str(years))
+        years_int = int(m.group()) if m else 3
 
-# 3) Message tool
+    # 2) Compute cutoff
+    cutoff = pd.Timestamp.today() - pd.DateOffset(years=years_int)
+
+    # 3) Filter your DataFrame (assuming your df is called `df`)
+    stale = df[df["Company"].notna() & (df["Connected On"] < cutoff)]
+    return stale[[
+        "First Name","Last Name","URL","Position","Company","Connected On"
+    ]].to_dict(orient="records")
+
+from openai import OpenAI
 oai = OpenAI()
-def craft_message(first_name, company, role):
-    prompt = (
-      f"Write a friendly LinkedIn message to {first_name}, a {role} at {company}, "
-      "mentioning our shared AI product interest and asking to reconnect."
-    )
-    resp = oai.chat.completions.create(
-      model="gpt-4o-mini",
-      messages=[{"role":"user","content":prompt}],
-    )
-    return resp.choices[0].message.content
+connections_df = df

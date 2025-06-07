@@ -1,2 +1,4 @@
 .env
 connections.csv
+saved_jobs.csv
+meetings.csv
