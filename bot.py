@@ -1,97 +1,20 @@
-import os
-import discord
-from discord import app_commands
-from dotenv import load_dotenv
+from langchain.agents import initialize_agent, Tool
 from openai import OpenAI
+from tools import top_companies, stale_connections, craft_message
 
-# Load environment variables
-load_dotenv()
-DISCORD_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+tools = [
+    Tool("top_companies", top_companies, "Top companies in my network."),
+    Tool("stale_connections", stale_connections, "Connections older than X years."),
+    Tool("craft_message", craft_message, "Draft a LinkedIn note."),
+    # Tool("send_message", send_message, "Send the message to a profile.")  # use carefully
+]
 
-# Setup OpenAI client
-client = OpenAI(api_key=OPENAI_API_KEY)
+llm = OpenAI(temperature=0)
+agent = initialize_agent(tools, llm, agent="zero-shot-react-description", verbose=True)
 
-# Setup Discord bot
-intents = discord.Intents.default()
-intents.message_content = True  # Required for reading messages in 2.x
-
-bot = discord.Client(intents=intents)
-tree = app_commands.CommandTree(bot)
-
-@bot.event
-async def on_ready():
-    await tree.sync()
-    print(f"✅ Logged in as {bot.user}!")
-
-# 🔒 Private summary command (ephemeral)
-@tree.command(name="summarize", description="Summarize the last 50 messages with action items (private)")
-async def summarize(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True, thinking=True)
-
-    # Fetch last 50 messages
-    messages = []
-    async for msg in interaction.channel.history(limit=50):
-        if msg.content:
-            messages.append(msg.content)
-    messages_text = "\n".join(reversed(messages))
-
-    prompt = f"""
-    You are an AI meeting assistant. Your task is to:
-    1️⃣ Provide a concise 3-4 sentence summary of the following conversation.
-    2️⃣ Identify any action items, tasks, or next steps that are mentioned or implied.
-
-    Conversation:
-    {messages_text}
-    """
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You’re a helpful meeting summarizer and action item tracker."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-        answer = response.choices[0].message.content.strip()
-        await interaction.followup.send(f"**Summary & Action Items:**\n{answer}", ephemeral=True)
-
-    except Exception as e:
-        await interaction.followup.send(f"Oops! Something went wrong:\n```{e}```", ephemeral=True)
-
-# 🌟 Public summary command (visible to everyone)
-@tree.command(name="summarize_publicly", description="Summarize the last 50 messages with action items (public)")
-async def summarize_publicly(interaction: discord.Interaction):
-    await interaction.response.defer(thinking=True)  # No ephemeral=True here!
-
-    # Fetch last 50 messages
-    messages = []
-    async for msg in interaction.channel.history(limit=50):
-        if msg.content:
-            messages.append(msg.content)
-    messages_text = "\n".join(reversed(messages))
-
-    prompt = f"""
-    You are an AI meeting assistant. Your task is to:
-    1️⃣ Provide a concise 3-4 sentence summary of the following conversation.
-    2️⃣ Identify any action items, tasks, or next steps that are mentioned or implied.
-
-    Conversation:
-    {messages_text}
-    """
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You’re a helpful meeting summarizer and action item tracker."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-        answer = response.choices[0].message.content.strip()
-        await interaction.followup.send(f"**Summary & Action Items:**\n{answer}")
-
-    except Exception as e:
-        await interaction.followup.send(f"Oops! Something went wrong:\n```{e}```")
-
-bot.run(DISCORD_TOKEN)
+if __name__ == "__main__":
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("query", help="What do you want to ask your LinkedIn network?")
+    args = p.parse_args()
+    print(agent.run(args.query))
