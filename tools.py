@@ -46,13 +46,16 @@ def top_companies(n=5):
         m = re.search(r"\d+", str(n))
         n_int = int(m.group()) if m else 5
 
-    # 2) Get the counts and return the top-n
-    counts = (
+    series = (
         df["Company"]
-        .fillna("Unknown")
-        .value_counts()
-        .head(n_int)
+          .fillna("")         # NaN→""
+          .astype(str)
+          .str.strip()
     )
+    # drop empty
+    series = series[series != ""]
+
+    counts = series.value_counts().head(n_int)
     return counts.to_dict()
 
 def stale_connections(years=3):
